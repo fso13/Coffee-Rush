@@ -1,3 +1,7 @@
+# Pages: Settings → Pages → Build and deployment → Source: GitHub Actions.
+# Шаг configure-pages не используем: без уже созданного сайта Pages API даёт 404,
+# для статического dist он не нужен (достаточно upload-pages-artifact + deploy-pages).
+
 name: Deploy to GitHub Pages
 
 on:
@@ -34,9 +38,6 @@ jobs:
         run: |
           npm ci
           npm run build
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

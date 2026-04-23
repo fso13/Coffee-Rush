@@ -16,6 +16,7 @@ type ActiveDrag = Readonly<{
 let activeDrag: ActiveDrag | null = null
 let lastDropTarget: HTMLElement | null = null
 let activeDispatch: ((a: GameAction) => void) | null = null
+let rulesOpen = false
 
 function clearDropOver(): void {
   if (lastDropTarget) lastDropTarget.classList.remove('dropOver')
@@ -418,6 +419,100 @@ function sameMultiset(a: ReadonlyArray<IngredientId>, b: ReadonlyArray<Ingredien
   return true
 }
 
+function rulesModalView(state: GameState, onClose: () => void): HTMLElement {
+  const overlay = el('div', {
+    className: 'rulesOverlay',
+    onClick: (e: MouseEvent) => {
+      if (e.target === overlay) onClose()
+    },
+  })
+
+  const modal = el('div', { className: 'rulesModal' })
+  modal.append(
+    el('div', { className: 'rulesHeader' }, [
+      el('h2', {}, ['Правила игры']),
+      el('button', { className: 'btn', onClick: onClose }, ['Закрыть']),
+    ]),
+  )
+
+  const body = el('div', { className: 'rulesBody' })
+  body.append(
+    el('section', { className: 'rulesSection' }, [
+      el('h3', {}, ['Цель']),
+      el('p', {}, [
+        'Выполняйте заказы напитков, управляя 3 чашками и перемещаясь по карте ингредиентов. Игра заканчивается поражением при 5 штрафах.',
+      ]),
+      el('p', {}, [
+        'Заказы в Таб 4, которые не успели выполнить к фазе времени, уходят в штрафы. За каждый такой заказ вы получаете 1 Rush-жетон.',
+      ]),
+    ]),
+  )
+
+  body.append(
+    el('section', { className: 'rulesSection' }, [
+      el('h3', {}, ['Подготовка']),
+      el('ul', {}, [
+        el('li', {}, ['Выберите стартовую чашку (1, 2 или 3).']),
+        el('li', {}, ['Кликните стартовую клетку на поле 4x4.']),
+        el('li', {}, [
+          'Ингредиент со стартовой клетки сразу добавляется в выбранную чашку, после чего начинается фаза движения.',
+        ]),
+      ]),
+    ]),
+  )
+
+  body.append(
+    el('section', { className: 'rulesSection' }, [
+      el('h3', {}, ['Поэтапность хода']),
+      el('ol', {}, [
+        el('li', {}, [el('b', {}, ['Move. ']), 'Двигайтесь по соседним клеткам (обычно 3 шага за ход) и собирайте ингредиенты.']),
+        el('li', {}, [el('b', {}, ['Pour. ']), 'Разливайте собранные ингредиенты по чашкам или сбрасывайте лишнее.']),
+        el('li', {}, [
+          el('b', {}, ['Process. ']),
+          'Выполняйте заказы, если состав ингредиентов в чашке полностью совпадает с картой заказа (с учетом количества и состава).',
+        ]),
+        el('li', {}, [
+          el('b', {}, ['Time. ']),
+          'Все заказы сдвигаются на 1 таб вниз; выпавшие из Таб 4 становятся штрафами. За каждый штраф получаете Rush-жетон.',
+        ]),
+        el('li', {}, [
+          el('b', {}, ['Новый ход. ']),
+          `После времени начинается новый Move. Если за прошлый ход выполнено заказов: K, в Таб 1 добирается до ${'2*K'} новых карт.`,
+        ]),
+      ]),
+    ]),
+  )
+
+  body.append(
+    el('section', { className: 'rulesSection' }, [
+      el('h3', {}, ['Важные механики']),
+      el('ul', {}, [
+        el('li', {}, ['Rush: можно потратить 1 жетон в фазе Move, чтобы получить +1 шаг в текущем ходу.']),
+        el('li', {}, ['Чашки можно очищать в фазах Pour и Process.']),
+        el('li', {}, ['Заказ выполняется только при точном совпадении ингредиентов в чашке с картой.']),
+        el('li', {}, ['Журнал внизу показывает последние действия и помогает отслеживать ход партии.']),
+      ]),
+    ]),
+  )
+
+  const upgradesList = el('ul')
+  for (const up of state.content.upgrades) {
+    upgradesList.append(el('li', {}, [el('b', {}, [`${up.name}. `]), up.description]))
+  }
+
+  body.append(
+    el('section', { className: 'rulesSection' }, [
+      el('h3', {}, ['Расширения / улучшения']),
+      el('p', {}, ['Любое улучшение активируется за 3 выполненных заказа (карты уходят в сброс улучшений).']),
+      upgradesList,
+    ]),
+  )
+
+  modal.append(body)
+  overlay.append(modal)
+  return overlay
+}
+
 function upgradesPanel(state: GameState, dispatch: (a: GameAction) => void): HTMLElement {
   const panel = el('div', { className: 'panel' })
   panel.append(
@@ -469,6 +564,18 @@ export function renderApp(
   )
   top.append(
     el('div', { className: 'hud' }, [
+      el(
+        'button',
+        {
+          className: `btn${rulesOpen ? ' primary' : ''}`,
+          onClick: () => {
+            rulesOpen = !rulesOpen
+            renderApp(root, state, dispatch, options)
+          },
+          title: 'Открыть справку по правилам',
+        },
+        ['Правила'],
+      ),
       el('span', { className: 'pill' }, [el('b', {}, ['Rush']), ` ${state.rushTokens}`]),
       el('span', { className: 'pill' }, [el('b', {}, ['Штрафы']), ` ${state.penalties.length}/5`]),
       el('span', { className: 'pill' }, [el('b', {}, ['Выполнено']), ` ${state.completed.length}`]),
@@ -670,7 +777,7 @@ export function renderApp(
       el('div', { className: 'left' }, [
         el('b', {}, ['Flow of Time']),
         el('span', {}, [
-          'Заказы сдвигаются вниз на 1 таб. Упавшие с Таб 4 становятся штрафами и дают Rush-жетоны.',
+          'Заказы сдвигаются вправо на 1 таб. Упавшие с Таб 4 становятся штрафами и дают Rush-жетоны.',
         ]),
       ]),
     )
@@ -701,5 +808,14 @@ export function renderApp(
   logBody.append(lines)
   logPanel.append(logBody)
   root.append(logPanel)
+
+  if (rulesOpen) {
+    root.append(
+      rulesModalView(state, () => {
+        rulesOpen = false
+        renderApp(root, state, dispatch, options)
+      }),
+    )
+  }
 }
 
