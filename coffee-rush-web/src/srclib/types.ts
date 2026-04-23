@@ -11,6 +11,7 @@ export type IngredientId =
 export type Phase = 'setup' | 'upgrade' | 'move' | 'pour' | 'process' | 'time' | 'gameover'
 
 export type UpgradeId = 'diagonalMove' | 'doubleCorner' | 'doubleSpecialCell'
+export type DifficultyId = 'intern' | 'barista' | 'burned'
 
 export type Coord = Readonly<{ r: number; c: number }>
 
@@ -39,6 +40,7 @@ export type CupState = Readonly<{
 export type GameState = Readonly<{
   seed: number
   phase: Phase
+  difficulty: DifficultyId
   content: Content
 
   meeple: Coord

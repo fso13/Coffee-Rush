@@ -1,10 +1,28 @@
-import type { Content, Coord, GameState, IngredientId, OrderCard, UpgradeId } from './types'
+import type { Content, Coord, DifficultyId, GameState, IngredientId, OrderCard, UpgradeId } from './types'
 import { createRng, shuffleInPlace } from './rng'
 
 export type CreateGameArgs = Readonly<{
   content: Content
   seed: number
+  difficulty?: DifficultyId
 }>
+
+export const DIFFICULTY_LABELS: Record<DifficultyId, string> = {
+  intern: 'Стажер',
+  barista: 'Бариста',
+  burned: 'Прожженый',
+}
+
+export const ORDER_SPAWN_COEFFICIENT: Record<DifficultyId, number> = {
+  intern: 0.75,
+  barista: 1,
+  burned: 1.5,
+}
+
+export function getScore(s: GameState): number {
+  const done = [...s.completed, ...s.discardCompleted]
+  return done.reduce((sum, card) => sum + card.ingredients.length, 0)
+}
 
 export type GameAction = Readonly<{
   kind: string
@@ -57,6 +75,62 @@ function drawFromDeck(s: GameState, count: number): { state: GameState; drawn: O
   return { state: { ...s, deckCursor: end }, drawn }
 }
 
+function sameIngredients(a: ReadonlyArray<IngredientId>, b: ReadonlyArray<IngredientId>): boolean {
+  if (a.length !== b.length) return false
+  const aa = [...a].sort()
+  const bb = [...b].sort()
+  for (let i = 0; i < aa.length; i++) if (aa[i] !== bb[i]) return false
+  return true
+}
+
+function isBlackCoffee(card: OrderCard): boolean {
+  return sameIngredients(card.ingredients, ['coffee', 'water'])
+}
+
+function takeFirstCard(deck: OrderCard[], predicate: (card: OrderCard) => boolean): OrderCard | null {
+  const idx = deck.findIndex(predicate)
+  if (idx < 0) return null
+  const [card] = deck.splice(idx, 1)
+  return card ?? null
+}
+
+function takeFirstRandomCard(deck: OrderCard[]): OrderCard | null {
+  const [card] = deck.splice(0, 1)
+  return card ?? null
+}
+
+function takeRandomNonBlack(deck: OrderCard[]): OrderCard | null {
+  const card = takeFirstCard(deck, (x) => !isBlackCoffee(x))
+  if (card) return card
+  return takeFirstRandomCard(deck)
+}
+
+function makeInitialTabs(deck: OrderCard[], difficulty: DifficultyId): GameState['tabs'] {
+  const tab1: OrderCard[] = []
+  const tab2: OrderCard[] = []
+  const takeBlack = () => takeFirstCard(deck, isBlackCoffee) ?? takeFirstRandomCard(deck)
+  const takeRandom = () => takeRandomNonBlack(deck)
+
+  if (difficulty === 'intern') {
+    const black = takeBlack()
+    if (black) tab1.push(black)
+  } else if (difficulty === 'barista') {
+    const random = takeRandom()
+    const black = takeBlack()
+    if (random) tab1.push(random)
+    if (black) tab2.push(black)
+  } else {
+    const random1 = takeRandom()
+    const random2 = takeRandom()
+    const black = takeBlack()
+    if (random1) tab1.push(random1)
+    if (random2) tab1.push(random2)
+    if (black) tab2.push(black)
+  }
+
+  return { tab1, tab2, tab3: [], tab4: [] }
+}
+
 function removeCardById(cards: ReadonlyArray<OrderCard>, id: string): OrderCard[] {
   const idx = cards.findIndex((c) => c.id === id)
   if (idx < 0) return [...cards]
@@ -84,14 +158,17 @@ function withCupIngredients(s: GameState, cupIdx: 0 | 1 | 2, ingredients: Ingred
 
 export function createGame(args: CreateGameArgs): GameState {
   const rng = createRng(args.seed)
+  const difficulty = args.difficulty ?? 'barista'
   const deck = [...args.content.deck]
   shuffleInPlace(deck, rng)
+  const tabs = makeInitialTabs(deck, difficulty)
 
   const content: Content = { ...args.content, deck }
 
   const base: GameState = {
     seed: args.seed,
     phase: 'setup',
+    difficulty,
     content,
     meeple: { r: 0, c: 0 },
     rushTokens: 0,
@@ -99,7 +176,7 @@ export function createGame(args: CreateGameArgs): GameState {
     completed: [],
     discardCompleted: [],
     activeUpgrades: [],
-    tabs: { tab1: [], tab2: [], tab3: [], tab4: [] },
+    tabs,
     deckCursor: 0,
     move: { stepsMax: 3, stepsLeft: 3, collectedThisTurn: [] },
     setup: { selectedStartCup: 0 },
@@ -110,10 +187,6 @@ export function createGame(args: CreateGameArgs): GameState {
   }
 
   let s = base
-  const d1 = drawFromDeck(s, 2)
-  s = { ...d1.state, tabs: { ...d1.state.tabs, tab1: d1.drawn } }
-  const d2 = drawFromDeck(s, 1)
-  s = { ...d2.state, tabs: { ...d2.state.tabs, tab2: d2.drawn } }
 
   // Clamp default position; player will choose the actual starting cell during setup.
   s = { ...s, meeple: clampCoord(s.content.boardLayout, s.meeple) }
@@ -138,6 +211,11 @@ export const Actions = {
       if (s.phase !== 'setup') return s
       return { ...s, setup: { selectedStartCup: cupIdx } }
     },
+  }),
+
+  setDifficulty: (difficulty: DifficultyId): GameAction => ({
+    kind: 'setDifficulty',
+    reduce: (s) => ({ ...s, difficulty }),
   }),
 
   placeStartMeeple: (to: Coord): GameAction => ({
@@ -366,7 +444,7 @@ export const Actions = {
         completed: [card, ...s.completed],
         process: { completedThisTurn: s.process.completedThisTurn + 1 },
       }
-      return addLog(next, `Заказ выполнен: «${card.name}» (чашка ${cupIdx + 1}).`)
+      return addLog(next, `Заказ выполнен: «${card.name}» (☕${cupIdx + 1}).`)
     },
   }),
 
@@ -413,11 +491,12 @@ export const Actions = {
       // ВАЖНО: добор должен происходить после сдвига заказов (после nextTabs).
       const k = s.process.completedThisTurn
       if (k > 0) {
-        const drawCount = 2 * k
+        const coeff = ORDER_SPAWN_COEFFICIENT[s.difficulty]
+        const drawCount = Math.max(1, Math.round(2 * k * coeff))
         const res = drawFromDeck(next, drawCount)
         next = res.state
         next = { ...next, tabs: { ...next.tabs, tab1: [...res.drawn, ...next.tabs.tab1] } }
-        next = addLog(next, `Соло-добор: +${res.drawn.length}/${drawCount} карт в Таб 1.`)
+        next = addLog(next, `Соло-добор: +${res.drawn.length}/${drawCount} карт в Таб 1 (коэф. ${coeff}).`)
       }
 
       return addLog(next, 'Новый ход: фаза движения.')

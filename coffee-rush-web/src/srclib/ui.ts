@@ -1,5 +1,5 @@
-import type { Coord, GameState, IngredientId, OrderCard } from './types'
-import { Actions, type GameAction } from './game'
+import type { Coord, DifficultyId, GameState, IngredientId, OrderCard } from './types'
+import { Actions, DIFFICULTY_LABELS, ORDER_SPAWN_COEFFICIENT, getScore, type GameAction } from './game'
 import { drinkIconDataUri, ingredientIconDataUri, ingredientLabelRu } from './icons'
 
 type DragPayload =
@@ -17,6 +17,12 @@ let activeDrag: ActiveDrag | null = null
 let lastDropTarget: HTMLElement | null = null
 let activeDispatch: ((a: GameAction) => void) | null = null
 let rulesOpen = false
+type AchievementEntry = Readonly<{
+  id: string
+  createdAt: number
+  difficulty: DifficultyId
+  score: number
+}>
 
 function clearDropOver(): void {
   if (lastDropTarget) lastDropTarget.classList.remove('dropOver')
@@ -168,6 +174,28 @@ function fmtIng(i: IngredientId): string {
   return ingredientLabelRu(i)
 }
 
+function cupMark(idx: number): string {
+  return `☕${idx + 1}`
+}
+
+function difficultySelectView(state: GameState, dispatch: (a: GameAction) => void): HTMLElement {
+  const selectEl = el(
+    'select',
+    {
+      className: 'difficultySelect',
+      onChange: (e: Event) => {
+        const selected = (e.target as HTMLSelectElement).value as DifficultyId
+        dispatch(Actions.setDifficulty(selected))
+      },
+    },
+    (['intern', 'barista', 'burned'] as DifficultyId[]).map((difficulty) =>
+      el('option', { value: difficulty }, [`${DIFFICULTY_LABELS[difficulty]} (${ORDER_SPAWN_COEFFICIENT[difficulty]})`]),
+    ),
+  )
+  ;(selectEl as HTMLSelectElement).value = state.difficulty
+  return selectEl
+}
+
 function isSpecial(s: GameState, coord: Coord): boolean {
   return s.content.specialCells.some((x) => x.r === coord.r && x.c === coord.c)
 }
@@ -260,7 +288,7 @@ function cupsView(state: GameState, dispatch: (a: GameAction) => void): HTMLElem
     })
     cupEl.append(
       el('div', { className: 'cupTitle' }, [
-        el('b', {}, [`Чашка ${i + 1}`]),
+        el('b', {}, [cupMark(i)]),
         el('span', { className: 'small' }, [`${cup.ingredients.length} шт.`]),
       ]),
     )
@@ -398,7 +426,7 @@ function tabColumn(
               disabled: !ok,
               onClick: ok ? () => dispatch(Actions.fulfillFromTab(tabKey, card.id, i as 0 | 1 | 2)) : undefined,
             },
-            [`Чашка ${i + 1}`],
+            [cupMark(i)],
           ),
         )
       }
@@ -452,6 +480,10 @@ function rulesModalView(state: GameState, onClose: () => void): HTMLElement {
     el('section', { className: 'rulesSection' }, [
       el('h3', {}, ['Подготовка']),
       el('ul', {}, [
+        el('li', {}, ['Стартовые заказы зависят от сложности.']),
+        el('li', {}, ['Стажер: Таб 1 = Черный кофе, Таб 2 = пусто.']),
+        el('li', {}, ['Бариста: Таб 1 = 1 случайный, Таб 2 = Черный кофе.']),
+        el('li', {}, ['Прожженый: Таб 1 = 2 случайных, Таб 2 = Черный кофе.']),
         el('li', {}, ['Выберите стартовую чашку (1, 2 или 3).']),
         el('li', {}, ['Кликните стартовую клетку на поле 4x4.']),
         el('li', {}, [
@@ -513,6 +545,53 @@ function rulesModalView(state: GameState, onClose: () => void): HTMLElement {
   return overlay
 }
 
+function formatDate(value: number): string {
+  const d = new Date(value)
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function ratingModalView(achievements: ReadonlyArray<AchievementEntry>, onClose: () => void): HTMLElement {
+  const overlay = el('div', {
+    className: 'rulesOverlay',
+    onClick: (e: MouseEvent) => {
+      if (e.target === overlay) onClose()
+    },
+  })
+  const modal = el('div', { className: 'rulesModal' })
+  modal.append(
+    el('div', { className: 'rulesHeader' }, [
+      el('h2', {}, ['Рейтинг']),
+      el('button', { className: 'btn', onClick: onClose }, ['Закрыть']),
+    ]),
+  )
+  const body = el('div', { className: 'rulesBody' })
+  if (achievements.length === 0) {
+    body.append(el('p', {}, ['Пока нет сохраненных достижений. Завершите партию, чтобы добавить результат.']))
+  } else {
+    const list = el('div', { className: 'ratingList' })
+    achievements.forEach((a, idx) => {
+      list.append(
+        el('div', { className: 'ratingRow' }, [
+          el('b', {}, [`#${idx + 1}`]),
+          el('span', {}, [DIFFICULTY_LABELS[a.difficulty]]),
+          el('span', {}, [`${a.score} очк.`]),
+          el('span', { className: 'meta' }, [formatDate(a.createdAt)]),
+        ]),
+      )
+    })
+    body.append(list)
+  }
+  modal.append(body)
+  overlay.append(modal)
+  return overlay
+}
+
 function upgradesPanel(state: GameState, dispatch: (a: GameAction) => void): HTMLElement {
   const panel = el('div', { className: 'panel' })
   panel.append(
@@ -548,7 +627,12 @@ export function renderApp(
   root: HTMLElement,
   state: GameState,
   dispatch: (a: GameAction) => void,
-  options?: Readonly<{ canUndo?: boolean }>,
+  options?: Readonly<{
+    canUndo?: boolean
+    achievements?: ReadonlyArray<AchievementEntry>
+    ratingOpen?: boolean
+    onToggleRating?: () => void
+  }>,
 ): void {
   activeDispatch = dispatch
   root.replaceChildren()
@@ -576,9 +660,23 @@ export function renderApp(
         },
         ['Правила'],
       ),
+      el(
+        'button',
+        {
+          className: `btn${options?.ratingOpen ? ' primary' : ''}`,
+          onClick: () => options?.onToggleRating?.(),
+          title: 'Открыть рейтинг',
+        },
+        ['Рейтинг'],
+      ),
+      el('label', { className: 'difficultyControl', title: `Коэффициент заказов: ${ORDER_SPAWN_COEFFICIENT[state.difficulty]}` }, [
+        el('span', {}, ['Сложность']),
+        difficultySelectView(state, dispatch),
+      ]),
       el('span', { className: 'pill' }, [el('b', {}, ['Rush']), ` ${state.rushTokens}`]),
       el('span', { className: 'pill' }, [el('b', {}, ['Штрафы']), ` ${state.penalties.length}/5`]),
-      el('span', { className: 'pill' }, [el('b', {}, ['Выполнено']), ` ${state.completed.length}`]),
+      el('span', { className: 'pill' }, [el('b', {}, ['Выполнено']), ` ${state.completed.length + state.discardCompleted.length}`]),
+      el('span', { className: 'pill' }, [el('b', {}, ['Очки']), ` ${getScore(state)}`]),
       el(
         'button',
         {
@@ -593,7 +691,7 @@ export function renderApp(
         'button',
         {
           className: 'btn danger',
-          onClick: () => dispatch(Actions.restart({ content: state.content, seed: Date.now() })),
+          onClick: () => dispatch(Actions.restart({ content: state.content, seed: Date.now(), difficulty: state.difficulty })),
         },
         ['Заново'],
       ),
@@ -686,16 +784,20 @@ export function renderApp(
 
   const phasePanel = el('div', { className: 'banner' })
   if (state.phase === 'gameover') {
+    const score = getScore(state)
     phasePanel.append(
       el('div', { className: 'left' }, [
         el('b', { style: `color: var(--danger);` }, ['Game Over']),
-        el('span', {}, ['Вы получили 5 штрафов.']),
+        el('span', {}, [`Вы получили 5 штрафов. Итог: ${score} очков (${DIFFICULTY_LABELS[state.difficulty]}).`]),
       ]),
     )
     phasePanel.append(
       el(
         'button',
-        { className: 'btn primary', onClick: () => dispatch(Actions.restart({ content: state.content, seed: Date.now() })) },
+        {
+          className: 'btn primary',
+          onClick: () => dispatch(Actions.restart({ content: state.content, seed: Date.now(), difficulty: state.difficulty })),
+        },
         ['Играть снова'],
       ),
     )
@@ -814,6 +916,13 @@ export function renderApp(
       rulesModalView(state, () => {
         rulesOpen = false
         renderApp(root, state, dispatch, options)
+      }),
+    )
+  }
+  if (options?.ratingOpen) {
+    root.append(
+      ratingModalView(options?.achievements ?? [], () => {
+        options?.onToggleRating?.()
       }),
     )
   }

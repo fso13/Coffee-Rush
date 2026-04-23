@@ -48,7 +48,7 @@ function ruNameFromIngredients(ingredients: IngredientId[]): string {
     'chocolate+milk+steam': 'Горячий шоколад',
     'coffee+milk+caramel': 'Карамельный латте',
     'coffee+milk': 'Кофе с молоком',
-    'coffee+water': 'Кофе (черный)',
+    'coffee+water': 'Черный кофе',
     'tea+water': 'Чай',
     'chocolate+milk': 'Какао',
   }
