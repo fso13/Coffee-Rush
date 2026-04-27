@@ -1,10 +1,11 @@
-import type { Content, Coord, DifficultyId, GameState, IngredientId, OrderCard, UpgradeId } from './types'
+import type { Content, Coord, DifficultyId, GameModeId, GameState, IngredientId, OrderCard, UpgradeId } from './types'
 import { createRng, shuffleInPlace } from './rng'
 
 export type CreateGameArgs = Readonly<{
   content: Content
   seed: number
   difficulty?: DifficultyId
+  mode?: GameModeId
 }>
 
 export const DIFFICULTY_LABELS: Record<DifficultyId, string> = {
@@ -19,9 +20,31 @@ export const ORDER_SPAWN_COEFFICIENT: Record<DifficultyId, number> = {
   burned: 1.5,
 }
 
+export const GAME_MODE_LABELS: Record<GameModeId, string> = {
+  classic: 'Классика',
+  waves: 'Волны',
+}
+
 export function getScore(s: GameState): number {
   const done = [...s.completed, ...s.discardCompleted]
   return done.reduce((sum, card) => sum + card.ingredients.length, 0)
+}
+
+function getWaveFromCompleted(totalCompleted: number): 1 | 2 | 3 | 4 | 5 {
+  const wave = Math.floor(totalCompleted / 8) + 1
+  if (wave <= 1) return 1
+  if (wave >= 5) return 5
+  return wave as 2 | 3 | 4
+}
+
+function getWaveSpawnCount(wave: 1 | 2 | 3 | 4 | 5, turnsInCurrent: number): number {
+  const onSecondTurn = turnsInCurrent % 2 === 0
+  const onThirdTurn = turnsInCurrent % 3 === 0
+  if (wave === 1) return 1
+  if (wave === 2) return 1 + (onSecondTurn ? 1 : 0)
+  if (wave === 3) return 2
+  if (wave === 4) return 2 + (onSecondTurn ? 1 : 0)
+  return 1 + (onSecondTurn ? 1 : 0) + (onThirdTurn ? 1 : 0)
 }
 
 export type GameAction = Readonly<{
@@ -159,6 +182,7 @@ function withCupIngredients(s: GameState, cupIdx: 0 | 1 | 2, ingredients: Ingred
 export function createGame(args: CreateGameArgs): GameState {
   const rng = createRng(args.seed)
   const difficulty = args.difficulty ?? 'barista'
+  const mode = args.mode ?? 'classic'
   const deck = [...args.content.deck]
   shuffleInPlace(deck, rng)
   const tabs = makeInitialTabs(deck, difficulty)
@@ -169,6 +193,7 @@ export function createGame(args: CreateGameArgs): GameState {
     seed: args.seed,
     phase: 'setup',
     difficulty,
+    mode,
     content,
     meeple: { r: 0, c: 0 },
     rushTokens: 0,
@@ -183,6 +208,7 @@ export function createGame(args: CreateGameArgs): GameState {
     cups: [{ ingredients: [] }, { ingredients: [] }, { ingredients: [] }],
     pour: { selectedCollectedIdx: null },
     process: { completedThisTurn: 0 },
+    waves: { current: 1, turnsInCurrent: 0 },
     log: [],
   }
 
@@ -216,6 +242,11 @@ export const Actions = {
   setDifficulty: (difficulty: DifficultyId): GameAction => ({
     kind: 'setDifficulty',
     reduce: (s) => ({ ...s, difficulty }),
+  }),
+
+  setMode: (mode: GameModeId): GameAction => ({
+    kind: 'setMode',
+    reduce: (s) => ({ ...s, mode }),
   }),
 
   placeStartMeeple: (to: Coord): GameAction => ({
@@ -478,7 +509,7 @@ export const Actions = {
         tabs: nextTabs,
         penalties: nextPenalties,
         rushTokens: s.rushTokens + newRush,
-        phase: nextPenalties.length >= 5 ? 'gameover' : 'move',
+        phase: nextPenalties.length >= 10 ? 'gameover' : 'move',
         move: { stepsMax: 3, stepsLeft: 3, collectedThisTurn: [] },
         pour: { selectedCollectedIdx: null },
         process: { completedThisTurn: 0 },
@@ -486,17 +517,36 @@ export const Actions = {
 
       next = addLog(next, `Время прошло. Штрафы +${fellOff.length}. Rush +${newRush}.`)
 
-      if (next.phase === 'gameover') return addLog(next, 'Игра окончена: получено 5 штрафов.')
+      if (next.phase === 'gameover') return addLog(next, 'Игра окончена: получено 10 штрафов.')
 
-      // ВАЖНО: добор должен происходить после сдвига заказов (после nextTabs).
-      const k = s.process.completedThisTurn
-      if (k > 0) {
-        const coeff = ORDER_SPAWN_COEFFICIENT[s.difficulty]
-        const drawCount = Math.max(1, Math.round(2 * k * coeff))
-        const res = drawFromDeck(next, drawCount)
-        next = res.state
-        next = { ...next, tabs: { ...next.tabs, tab1: [...res.drawn, ...next.tabs.tab1] } }
-        next = addLog(next, `Соло-добор: +${res.drawn.length}/${drawCount} карт в Таб 1 (коэф. ${coeff}).`)
+      // ВАЖНО: добор происходит после сдвига заказов (после nextTabs).
+      if (s.mode === 'waves') {
+        const totalCompleted = s.completed.length + s.discardCompleted.length
+        const targetWave = getWaveFromCompleted(totalCompleted)
+        const waveChanged = targetWave !== s.waves.current
+        const turnsInCurrent = waveChanged ? 1 : s.waves.turnsInCurrent + 1
+        const drawCount = getWaveSpawnCount(targetWave, turnsInCurrent)
+
+        next = { ...next, waves: { current: targetWave, turnsInCurrent } }
+
+        if (drawCount > 0) {
+          const res = drawFromDeck(next, drawCount)
+          next = res.state
+          next = { ...next, tabs: { ...next.tabs, tab1: [...res.drawn, ...next.tabs.tab1] } }
+          next = addLog(next, `Волна ${targetWave}: +${res.drawn.length}/${drawCount} карт в Таб 1.`)
+        } else {
+          next = addLog(next, `Волна ${targetWave}: этот ход без нового заказа.`)
+        }
+      } else {
+        const k = s.process.completedThisTurn
+        if (k > 0) {
+          const coeff = ORDER_SPAWN_COEFFICIENT[s.difficulty]
+          const drawCount = Math.max(1, Math.round(2 * k * coeff))
+          const res = drawFromDeck(next, drawCount)
+          next = res.state
+          next = { ...next, tabs: { ...next.tabs, tab1: [...res.drawn, ...next.tabs.tab1] } }
+          next = addLog(next, `Соло-добор: +${res.drawn.length}/${drawCount} карт в Таб 1 (коэф. ${coeff}).`)
+        }
       }
 
       return addLog(next, 'Новый ход: фаза движения.')

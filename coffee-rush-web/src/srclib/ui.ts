@@ -1,5 +1,5 @@
-import type { Coord, DifficultyId, GameState, IngredientId, OrderCard } from './types'
-import { Actions, DIFFICULTY_LABELS, ORDER_SPAWN_COEFFICIENT, getScore, type GameAction } from './game'
+import type { Coord, DifficultyId, GameModeId, GameState, IngredientId, OrderCard } from './types'
+import { Actions, DIFFICULTY_LABELS, GAME_MODE_LABELS, ORDER_SPAWN_COEFFICIENT, getScore, type GameAction } from './game'
 import { drinkIconDataUri, ingredientIconDataUri, ingredientLabelRu } from './icons'
 
 type DragPayload =
@@ -193,6 +193,22 @@ function difficultySelectView(state: GameState, dispatch: (a: GameAction) => voi
     ),
   )
   ;(selectEl as HTMLSelectElement).value = state.difficulty
+  return selectEl
+}
+
+function modeSelectView(state: GameState, dispatch: (a: GameAction) => void): HTMLElement {
+  const selectEl = el(
+    'select',
+    {
+      className: 'difficultySelect',
+      onChange: (e: Event) => {
+        const selected = (e.target as HTMLSelectElement).value as GameModeId
+        dispatch(Actions.setMode(selected))
+      },
+    },
+    (['classic', 'waves'] as GameModeId[]).map((mode) => el('option', { value: mode }, [GAME_MODE_LABELS[mode]])),
+  )
+  ;(selectEl as HTMLSelectElement).value = state.mode
   return selectEl
 }
 
@@ -422,7 +438,7 @@ function tabColumn(
           el(
             'button',
             {
-              className: `btn${ok ? ' primary' : ''}`,
+              className: `btn tabCupBtn${ok ? ' primary tabCupBtnMatch' : ''}`,
               disabled: !ok,
               onClick: ok ? () => dispatch(Actions.fulfillFromTab(tabKey, card.id, i as 0 | 1 | 2)) : undefined,
             },
@@ -468,7 +484,7 @@ function rulesModalView(state: GameState, onClose: () => void): HTMLElement {
     el('section', { className: 'rulesSection' }, [
       el('h3', {}, ['Цель']),
       el('p', {}, [
-        'Выполняйте заказы напитков, управляя 3 чашками и перемещаясь по карте ингредиентов. Игра заканчивается поражением при 5 штрафах.',
+        'Выполняйте заказы напитков, управляя 3 чашками и перемещаясь по карте ингредиентов. Игра заканчивается поражением при 10 штрафах.',
       ]),
       el('p', {}, [
         'Заказы в Таб 4, которые не успели выполнить к фазе времени, уходят в штрафы. За каждый такой заказ вы получаете 1 Rush-жетон.',
@@ -673,9 +689,11 @@ export function renderApp(
         el('span', {}, ['Сложность']),
         difficultySelectView(state, dispatch),
       ]),
+      el('label', { className: 'difficultyControl' }, [el('span', {}, ['Режим']), modeSelectView(state, dispatch)]),
       el('span', { className: 'pill' }, [el('b', {}, ['Rush']), ` ${state.rushTokens}`]),
-      el('span', { className: 'pill' }, [el('b', {}, ['Штрафы']), ` ${state.penalties.length}/5`]),
+      el('span', { className: 'pill' }, [el('b', {}, ['Штрафы']), ` ${state.penalties.length}/10`]),
       el('span', { className: 'pill' }, [el('b', {}, ['Выполнено']), ` ${state.completed.length + state.discardCompleted.length}`]),
+      state.mode === 'waves' ? el('span', { className: 'pill' }, [el('b', {}, ['Волна']), ` ${state.waves.current}`]) : null,
       el('span', { className: 'pill' }, [el('b', {}, ['Очки']), ` ${getScore(state)}`]),
       el(
         'button',
@@ -691,7 +709,8 @@ export function renderApp(
         'button',
         {
           className: 'btn danger',
-          onClick: () => dispatch(Actions.restart({ content: state.content, seed: Date.now(), difficulty: state.difficulty })),
+          onClick: () =>
+            dispatch(Actions.restart({ content: state.content, seed: Date.now(), difficulty: state.difficulty, mode: state.mode })),
         },
         ['Заново'],
       ),
@@ -788,7 +807,7 @@ export function renderApp(
     phasePanel.append(
       el('div', { className: 'left' }, [
         el('b', { style: `color: var(--danger);` }, ['Game Over']),
-        el('span', {}, [`Вы получили 5 штрафов. Итог: ${score} очков (${DIFFICULTY_LABELS[state.difficulty]}).`]),
+        el('span', {}, [`Вы получили 10 штрафов. Итог: ${score} очков (${DIFFICULTY_LABELS[state.difficulty]}).`]),
       ]),
     )
     phasePanel.append(
@@ -796,7 +815,8 @@ export function renderApp(
         'button',
         {
           className: 'btn primary',
-          onClick: () => dispatch(Actions.restart({ content: state.content, seed: Date.now(), difficulty: state.difficulty })),
+          onClick: () =>
+            dispatch(Actions.restart({ content: state.content, seed: Date.now(), difficulty: state.difficulty, mode: state.mode })),
         },
         ['Играть снова'],
       ),

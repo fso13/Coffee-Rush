@@ -12,6 +12,7 @@ export type Phase = 'setup' | 'upgrade' | 'move' | 'pour' | 'process' | 'time' |
 
 export type UpgradeId = 'diagonalMove' | 'doubleCorner' | 'doubleSpecialCell'
 export type DifficultyId = 'intern' | 'barista' | 'burned'
+export type GameModeId = 'classic' | 'waves'
 
 export type Coord = Readonly<{ r: number; c: number }>
 
@@ -41,6 +42,7 @@ export type GameState = Readonly<{
   seed: number
   phase: Phase
   difficulty: DifficultyId
+  mode: GameModeId
   content: Content
 
   meeple: Coord
@@ -78,6 +80,11 @@ export type GameState = Readonly<{
 
   process: Readonly<{
     completedThisTurn: number
+  }>
+
+  waves: Readonly<{
+    current: 1 | 2 | 3 | 4 | 5
+    turnsInCurrent: number
   }>
 
   log: ReadonlyArray<string>

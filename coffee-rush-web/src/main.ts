@@ -22,6 +22,7 @@ function isValidSavedState(value: unknown): value is GameState {
     typeof obj.phase === 'string' &&
     typeof obj.seed === 'number' &&
     (obj.difficulty === 'intern' || obj.difficulty === 'barista' || obj.difficulty === 'burned') &&
+    (obj.mode === 'classic' || obj.mode === 'waves') &&
     !!obj.content &&
     !!obj.tabs &&
     Array.isArray(obj.cups) &&
@@ -55,13 +56,15 @@ function migrateSavedState(value: unknown): GameState | null {
   const difficultyRaw = (obj as { difficulty?: string }).difficulty
   const difficulty: DifficultyId =
     difficultyRaw === 'intern' || difficultyRaw === 'burned' || difficultyRaw === 'barista' ? difficultyRaw : 'barista'
-  return { ...(obj as GameState), difficulty, setup: { selectedStartCup: normalizedCup } }
+  const modeRaw = (obj as { mode?: string }).mode
+  const mode = modeRaw === 'waves' || modeRaw === 'classic' ? modeRaw : 'classic'
+  return { ...(obj as GameState), difficulty, mode, setup: { selectedStartCup: normalizedCup }, waves: obj.waves ?? { current: 1, turnsInCurrent: 0 } }
 }
 
 function loadStateOrCreateNew(): GameState {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return createGame({ content, seed: Date.now(), difficulty: 'barista' })
+    if (!raw) return createGame({ content, seed: Date.now(), difficulty: 'barista', mode: 'classic' })
     const parsed: unknown = JSON.parse(raw)
     if (isValidSavedState(parsed)) return parsed
     const migrated = migrateSavedState(parsed)
@@ -69,7 +72,7 @@ function loadStateOrCreateNew(): GameState {
   } catch {
     // ignore and fallback to new game
   }
-  return createGame({ content, seed: Date.now(), difficulty: 'barista' })
+  return createGame({ content, seed: Date.now(), difficulty: 'barista', mode: 'classic' })
 }
 
 function persistState(nextState: GameState): void {
@@ -145,7 +148,7 @@ const dispatch = (action: GameAction) => {
 
   if (action.kind === 'restart') {
     history.length = 0
-    state = createGame({ content, seed: Date.now(), difficulty: state.difficulty })
+    state = createGame({ content, seed: Date.now(), difficulty: state.difficulty, mode: state.mode })
     persistState(state)
     rerender()
     return
@@ -154,7 +157,16 @@ const dispatch = (action: GameAction) => {
   if (action.kind === 'setDifficulty') {
     history.length = 0
     const nextDifficulty = action.reduce(state).difficulty
-    state = createGame({ content, seed: Date.now(), difficulty: nextDifficulty })
+    state = createGame({ content, seed: Date.now(), difficulty: nextDifficulty, mode: state.mode })
+    persistState(state)
+    rerender()
+    return
+  }
+
+  if (action.kind === 'setMode') {
+    history.length = 0
+    const nextMode = action.reduce(state).mode
+    state = createGame({ content, seed: Date.now(), difficulty: state.difficulty, mode: nextMode })
     persistState(state)
     rerender()
     return
